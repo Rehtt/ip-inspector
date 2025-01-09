@@ -1,0 +1,13 @@
+[Unit]
+Description=ip-inspector
+After=network.target
+Wants=network.target
+
+[Service]
+TimeoutStartSec=30
+ExecStart=/usr/local/sbin/ip-inspector
+ExecStop=/bin/kill $MAINPID
+Restart=1
+
+[Install]
+WantedBy=multi-user.target
