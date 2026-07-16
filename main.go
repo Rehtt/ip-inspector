@@ -1,8 +1,11 @@
 package main
 
 import (
+	"flag"
+	"log"
 	"net"
-	"strings"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -18,12 +21,17 @@ var (
 	timeLength  = 24 * time.Hour
 	timeLengthS = uint32(timeLength.Seconds())
 	ipsetName   = "blacklist"
-
-	addr = "0.0.0.0:3306"
 )
 
 func main() {
-	var err error
+	portsFlag := flag.String("ports", "", "comma-separated TCP ports to listen on (required)")
+	flag.Parse()
+
+	ports, err := parsePorts(*portsFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	tables, err = iptables.New()
 	if err != nil {
 		panic(err)
@@ -68,30 +76,63 @@ func main() {
 		}
 	}()
 
-	listen, err := net.Listen("tcp", addr)
-	if err != nil {
-		panic(err)
+	listeners := make([]net.Listener, 0, len(ports))
+	for _, port := range ports {
+		addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Printf("failed to listen on port %d: %v", port, err)
+			continue
+		}
+		listeners = append(listeners, listener)
+		log.Printf("listening on %s", addr)
 	}
+	if len(listeners) == 0 {
+		log.Fatal("failed to listen on any configured port")
+	}
+
+	var wg sync.WaitGroup
+	for _, listener := range listeners {
+		wg.Add(1)
+		go func(listener net.Listener) {
+			defer wg.Done()
+			acceptConnections(listener)
+		}(listener)
+	}
+	wg.Wait()
+}
+
+func acceptConnections(listener net.Listener) {
 	for {
-		conn, err := listen.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			continue
 		}
-		ip := net.ParseIP(strings.Split(conn.RemoteAddr().String(), ":")[0])
-		if len(ip) != 0 {
-			db.Create(&ConfinementCell{
-				Ip:   ip.String(),
-				Time: time.Now(),
-			})
-			err := netlink.IpsetAdd(ipsetName, &netlink.IPSetEntry{
-				IP:      ip,
-				Replace: true,
-			})
-			if err != nil {
-				panic(err)
-			}
-		}
-		conn.Close()
+		handleConnection(conn)
+	}
+}
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		return
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return
+	}
+
+	db.Create(&ConfinementCell{
+		Ip:   ip.String(),
+		Time: time.Now(),
+	})
+	if err := netlink.IpsetAdd(ipsetName, &netlink.IPSetEntry{
+		IP:      ip,
+		Replace: true,
+	}); err != nil {
+		panic(err)
 	}
 }
 

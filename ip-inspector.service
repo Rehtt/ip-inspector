@@ -5,7 +5,7 @@ Wants=network.target
 
 [Service]
 TimeoutStartSec=30
-ExecStart=/usr/local/sbin/ip-inspector
+ExecStart=/usr/local/sbin/ip-inspector "-ports=@PORTS@"
 ExecStop=/bin/kill $MAINPID
 WorkingDirectory=/var/lib/ip-inspector
 Restart=no
